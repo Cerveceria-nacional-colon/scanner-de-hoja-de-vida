@@ -10,11 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 
 <style>
-:root{
-  --bg:#f4f6f9;--surface:#fff;--surface2:#eef1f7;--border:#d0d8e8;
-  --accent:#003087;--accent2:#0052cc;--gold:#F5A623;--danger:#d0021b;
-  --text:#1a2240;--muted:#5a6a8a;
-}
+:root{--bg:#f4f6f9;--surface:#fff;--surface2:#eef1f7;--border:#d0d8e8;--accent:#003087;--accent2:#0052cc;--gold:#F5A623;--danger:#d0021b;--text:#1a2240;--muted:#5a6a8a}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);font-family:'Open Sans',sans-serif;color:var(--text)}
 .container{max-width:1100px;margin:auto;padding:0 24px}
@@ -115,27 +111,18 @@ textarea{min-height:150px;resize:vertical}
 <div class="layout">
   <div class="card">
     <div class="card-title">💼 Descripción de la Vacante</div>
-
     <div class="form-group">
       <label>Nombre del cargo</label>
       <input type="text" id="jobTitle" placeholder="Ej: Soporte Técnico Junior">
     </div>
-
     <div class="form-group">
       <label>Requisitos y descripción del cargo</label>
-      <textarea id="jobDesc" placeholder="Ejemplo:
-- Conocimientos básicos en soporte técnico
-- Manejo de Python, SQL, Excel y Office
-- Conocimientos básicos de Linux
-- Atención al cliente
-- Trabajo en equipo
-- Disponibilidad para aprender"></textarea>
+      <textarea id="jobDesc" placeholder="Describe requisitos, habilidades, experiencia mínima, formación, responsabilidades, etc."></textarea>
     </div>
   </div>
 
   <div class="card">
     <div class="card-title">📄 Hojas de Vida</div>
-
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div class="dropzone-icon">📂</div>
       <p>Arrastra archivos aquí o <strong>haz clic para seleccionar</strong></p>
@@ -273,11 +260,10 @@ async function readFile(file){
         const page = await pdf.getPage(pageNum);
         const content = await page.getTextContent();
 
-        const strings = content.items
+        fullText += content.items
           .map(item => item.str || '')
-          .filter(Boolean);
-
-        fullText += strings.join(' ') + '\n';
+          .filter(Boolean)
+          .join(' ') + '\n';
       }
 
       return cleanExtractedText(fullText);
@@ -370,7 +356,7 @@ async function startScan(){
   showToast(`✅ Análisis completo: ${results.length} candidato(s) evaluado(s)`);
 }
 
-/* NO SE CAMBIARON LOS CAMPOS QUE SE ENVÍAN A GOOGLE SHEETS */
+/* CAMPOS DE GOOGLE SHEETS SIN CAMBIAR */
 async function guardarEnSheets(r, puesto){
   const note = document.getElementById('syncNote');
 
@@ -410,63 +396,64 @@ async function analyzeCV(filename, cvText, jobTitle, jobDesc){
   const cleanCV = normalizeText(rawText);
   const cleanJob = normalizeText(jobTitle + ' ' + jobDesc);
 
+  const jobType = detectJobType(cleanJob);
   const name = extractName(rawText, filename);
   const email = extractEmail(rawText);
   const phone = extractPhone(rawText);
 
   const candidateSkills = detectCandidateSkills(cleanCV);
-  const jobRequirements = extractJobRequirements(cleanJob);
+  const jobRequirements = extractJobRequirements(cleanJob, jobType);
+  const criticalRequirements = extractCriticalRequirements(cleanJob, jobType);
 
   const matched = [];
   const missing = [];
 
   jobRequirements.forEach(req => {
-    const reqClean = normalizeText(req);
-
-    const found =
-      candidateSkills.some(skill => {
-        const skillClean = normalizeText(skill);
-        return skillClean.includes(reqClean) || reqClean.includes(skillClean);
-      }) ||
-      cleanCV.includes(reqClean) ||
-      compactText(cleanCV).includes(compactText(reqClean));
-
-    if(found){
+    if(matchesRequirement(req, candidateSkills, cleanCV)){
       matched.push(req);
     }else{
       missing.push(req);
     }
   });
 
-  const transferableSkills = detectTransferableSkills(candidateSkills, cleanCV, cleanJob);
-  const extraSkills = candidateSkills.filter(skill => !matched.includes(skill));
-  const allMatched = [...new Set([...matched, ...transferableSkills, ...extraSkills])];
+  const criticalMissing = criticalRequirements.filter(req => {
+    return !matchesRequirement(req, candidateSkills, cleanCV);
+  });
 
   let score = 0;
 
   if(cleanCV.length < 40){
     score = 35;
   }else{
-    score += calculateEducationScore(cleanCV, cleanJob);
-    score += calculateExperienceScore(cleanCV, cleanJob);
-    score += calculateSkillsScore(matched, jobRequirements, candidateSkills);
-    score += calculateRecruiterPotential(candidateSkills, cleanCV, cleanJob);
+    score += calculateEducationScore(cleanCV, jobType);
+    score += calculateExperienceScore(cleanCV, jobType);
+    score += calculateSkillsScore(matched, jobRequirements, candidateSkills, jobType);
+    score += calculateRecruiterPotential(candidateSkills, cleanCV, jobType);
 
     if(email) score += 3;
     if(phone) score += 2;
+
+    score -= calculateCriticalPenalty(criticalMissing, jobType);
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   let status = 'not_eligible';
 
-  if(score >= 65){
-    status = 'eligible';
-  }else if(score >= 40){
-    status = 'review';
+  if(jobType === 'operativo_critico'){
+    if(score >= 70 && criticalMissing.length === 0) status = 'eligible';
+    else if(score >= 40) status = 'review';
+    else status = 'not_eligible';
+  }else{
+    if(score >= 65) status = 'eligible';
+    else if(score >= 40) status = 'review';
+    else status = 'not_eligible';
   }
 
-  const summary = buildSummary(name, jobTitle, score, allMatched, missing, cleanCV.length, candidateSkills);
+  const extraSkills = candidateSkills.filter(skill => !matched.includes(skill));
+  const allMatched = [...new Set([...matched, ...extraSkills])];
+
+  const summary = buildSummary(name, jobTitle, score, allMatched, missing, criticalMissing, jobType, cleanCV.length);
 
   return {
     name,
@@ -474,11 +461,74 @@ async function analyzeCV(filename, cvText, jobTitle, jobDesc){
     status,
     score,
     matched_skills: allMatched.slice(0, 12),
-    missing_skills: missing.slice(0, 8),
+    missing_skills: [...new Set([...criticalMissing, ...missing])].slice(0, 8),
     summary,
     contact_email: email,
     contact_phone: phone
   };
+}
+
+function detectJobType(job){
+  const criticalWords = [
+    'montacargas','licencia','certificacion','certificado','seguridad industrial',
+    'operador','carga','descarga','pallets','turnos rotativos','planta',
+    'produccion','maquinaria','equipo pesado'
+  ];
+
+  const techWords = [
+    'soporte tecnico','help desk','service desk','it','sistemas',
+    'redes','ciberseguridad','linux','aws','python','sql'
+  ];
+
+  const criticalCount = criticalWords.filter(w => job.includes(normalizeText(w))).length;
+  const techCount = techWords.filter(w => job.includes(normalizeText(w))).length;
+
+  if(criticalCount >= 3 && techCount < 3) return 'operativo_critico';
+  if(techCount >= 2) return 'tecnico_junior';
+
+  return 'general';
+}
+
+function matchesRequirement(req, candidateSkills, cleanCV){
+  const reqClean = normalizeText(req);
+
+  return candidateSkills.some(skill => {
+    const skillClean = normalizeText(skill);
+    return skillClean.includes(reqClean) || reqClean.includes(skillClean);
+  }) ||
+  cleanCV.includes(reqClean) ||
+  compactText(cleanCV).includes(compactText(reqClean));
+}
+
+function extractCriticalRequirements(job, jobType){
+  const critical = [];
+
+  if(job.includes('montacargas')) critical.push('montacargas');
+  if(job.includes('licencia')) critical.push('licencia');
+  if(job.includes('certificacion') || job.includes('certificado')) critical.push('certificacion');
+  if(job.includes('seguridad industrial')) critical.push('seguridad industrial');
+  if(job.includes('turnos rotativos')) critical.push('turnos rotativos');
+  if(job.includes('pallets')) critical.push('pallets');
+  if(job.includes('carga') || job.includes('descarga')) critical.push('carga y descarga');
+
+  if(jobType === 'operativo_critico' && critical.length === 0){
+    critical.push('experiencia operativa específica');
+  }
+
+  return [...new Set(critical)];
+}
+
+function calculateCriticalPenalty(criticalMissing, jobType){
+  if(jobType !== 'operativo_critico') return 0;
+
+  let penalty = criticalMissing.length * 12;
+
+  if(criticalMissing.includes('montacargas')) penalty += 18;
+  if(criticalMissing.includes('licencia')) penalty += 15;
+  if(criticalMissing.includes('certificacion')) penalty += 12;
+  if(criticalMissing.includes('seguridad industrial')) penalty += 10;
+
+  return Math.min(penalty, 55);
 }
 
 function normalizeText(text){
@@ -547,7 +597,7 @@ function detectCandidateSkills(text){
   if(has('word','microsoft word')) skills.push('word');
   if(has('powerpoint','power point')) skills.push('powerpoint');
   if(has('office','microsoft office','paquete microsoft office')) skills.push('office');
-  if(has('linux','ndg linux','linux essentials','ndg linux essentials')) skills.push('linux');
+  if(has('linux','ndg linux','linux essentials')) skills.push('linux');
   if(has('aws','amazon web services','gestion en la nube con aws','nube')) skills.push('aws');
   if(has('cisco','networking basics','redes')) skills.push('redes');
   if(has('ciberseguridad','cybersecurity','seguridad informatica')) skills.push('ciberseguridad');
@@ -563,17 +613,25 @@ function detectCandidateSkills(text){
   if(has('soporte tecnico','help desk','service desk','soporte')) skills.push('soporte tecnico');
   if(has('digitalizacion','digital','sistemas digitales')) skills.push('digitalizacion');
 
+  if(has('montacargas')) skills.push('montacargas');
+  if(has('licencia')) skills.push('licencia');
+  if(has('seguridad industrial')) skills.push('seguridad industrial');
+  if(has('pallets')) skills.push('pallets');
+  if(has('turnos rotativos')) skills.push('turnos rotativos');
+
   return [...new Set(skills)];
 }
 
-function extractJobRequirements(jobText){
+function extractJobRequirements(jobText, jobType){
   const possible = [
     'python','sql','excel','word','powerpoint','office',
     'linux','aws','redes','ciberseguridad','inventario',
     'logistica','operaciones','reportes','atencion al cliente',
     'comunicacion efectiva','trabajo en equipo','ingles',
     'bachiller','universidad','licenciatura','soporte tecnico',
-    'administracion','experiencia','disponibilidad'
+    'administracion','experiencia','disponibilidad',
+    'montacargas','licencia','certificacion','seguridad industrial',
+    'carga y descarga','pallets','turnos rotativos'
   ];
 
   const requirements = [];
@@ -588,6 +646,7 @@ function extractJobRequirements(jobText){
   if(jobText.includes('cisco') && !requirements.includes('redes')) requirements.push('redes');
   if(jobText.includes('almacen') && !requirements.includes('inventario')) requirements.push('inventario');
   if(jobText.includes('despacho') && !requirements.includes('logistica')) requirements.push('logistica');
+  if((jobText.includes('carga') || jobText.includes('descarga')) && !requirements.includes('carga y descarga')) requirements.push('carga y descarga');
 
   if(requirements.length === 0){
     requirements.push('comunicacion efectiva','trabajo en equipo','experiencia');
@@ -596,29 +655,15 @@ function extractJobRequirements(jobText){
   return [...new Set(requirements)];
 }
 
-function detectTransferableSkills(candidateSkills, cv, job){
-  const transferibles = [];
-
-  const isTechRole =
-    job.includes('soporte') ||
-    job.includes('tecnico') ||
-    job.includes('sistemas') ||
-    job.includes('it') ||
-    job.includes('ciberseguridad') ||
-    job.includes('redes');
-
-  if(isTechRole){
-    if(candidateSkills.includes('sql') || candidateSkills.includes('python')) transferibles.push('base técnica');
-    if(candidateSkills.includes('linux') || candidateSkills.includes('aws') || candidateSkills.includes('redes')) transferibles.push('infraestructura básica');
-    if(candidateSkills.includes('operaciones') || candidateSkills.includes('reportes')) transferibles.push('seguimiento operativo');
-    if(candidateSkills.includes('atencion al cliente') || candidateSkills.includes('comunicacion efectiva')) transferibles.push('servicio y comunicación');
-  }
-
-  return [...new Set(transferibles)];
-}
-
-function calculateEducationScore(cv, job){
+function calculateEducationScore(cv, jobType){
   let score = 0;
+
+  if(jobType === 'operativo_critico'){
+    if(cv.includes('bachiller')) score += 8;
+    if(cv.includes('informatica')) score += 3;
+    if(cv.includes('curso') || cv.includes('certificacion')) score += 5;
+    return Math.min(score, 12);
+  }
 
   if(cv.includes('universidad')) score += 8;
   if(cv.includes('licenciatura')) score += 8;
@@ -630,7 +675,7 @@ function calculateEducationScore(cv, job){
   return Math.min(score, 28);
 }
 
-function calculateExperienceScore(cv, job){
+function calculateExperienceScore(cv, jobType){
   let score = 0;
 
   if(cv.includes('experiencia')) score += 8;
@@ -644,14 +689,29 @@ function calculateExperienceScore(cv, job){
   if(cv.includes('inventario')) score += 6;
   if(cv.includes('logistica')) score += 6;
 
+  if(jobType === 'operativo_critico'){
+    if(cv.includes('montacargas')) score += 25;
+    if(cv.includes('licencia')) score += 18;
+    if(cv.includes('seguridad industrial')) score += 12;
+    if(cv.includes('carga') || cv.includes('descarga')) score += 10;
+    return Math.min(score, 35);
+  }
+
   return Math.min(score, 30);
 }
 
-function calculateSkillsScore(matched, requirements, candidateSkills){
+function calculateSkillsScore(matched, requirements, candidateSkills, jobType){
   let score = 0;
 
   if(requirements.length > 0){
     score += (matched.length / requirements.length) * 30;
+  }
+
+  if(jobType === 'operativo_critico'){
+    const relevant = ['montacargas','licencia','seguridad industrial','pallets','turnos rotativos','inventario','logistica','operaciones'];
+    const count = candidateSkills.filter(s => relevant.includes(s)).length;
+    score += Math.min(count * 6, 25);
+    return Math.min(score, 35);
   }
 
   score += Math.min(candidateSkills.length * 7, 45);
@@ -666,7 +726,16 @@ function calculateSkillsScore(matched, requirements, candidateSkills){
   return Math.min(score, 55);
 }
 
-function calculateRecruiterPotential(candidateSkills, cv, job){
+function calculateRecruiterPotential(candidateSkills, cv, jobType){
+  if(jobType === 'operativo_critico'){
+    let score = 0;
+    if(candidateSkills.includes('inventario')) score += 5;
+    if(candidateSkills.includes('logistica')) score += 5;
+    if(candidateSkills.includes('operaciones')) score += 5;
+    if(candidateSkills.includes('reportes')) score += 3;
+    return Math.min(score, 15);
+  }
+
   let score = 0;
 
   const techBase = ['python','sql','linux','aws','redes','ciberseguridad','excel','office'];
@@ -683,33 +752,27 @@ function calculateRecruiterPotential(candidateSkills, cv, job){
   return Math.min(score, 20);
 }
 
-function buildSummary(name, jobTitle, score, matched, missing, textLength, candidateSkills){
+function buildSummary(name, jobTitle, score, matched, missing, criticalMissing, jobType, textLength){
   const cargo = jobTitle || 'la vacante indicada';
 
   if(textLength < 40){
-    return `${name} fue cargado correctamente, pero el sistema no pudo extraer suficiente texto del archivo. Conviene subirlo en DOCX o PDF con texto seleccionable.`;
+    return `${name} fue cargado correctamente, pero el sistema no pudo extraer suficiente texto del archivo.`;
   }
 
   let text = `${name} presenta una compatibilidad de ${score}% para ${cargo}.`;
 
-  if(score >= 65){
+  if(jobType === 'operativo_critico' && criticalMissing.length){
+    text += ` Aunque cuenta con habilidades transferibles, no evidencia requisitos críticos como ${criticalMissing.slice(0,4).join(', ')}.`;
+  }else if(score >= 65){
     text += ` El perfil muestra potencial sólido para una posición junior o de entrada.`;
   }else if(score >= 40){
-    text += ` El perfil puede considerarse para revisión, especialmente si la vacante permite formación inicial.`;
+    text += ` El perfil puede considerarse para revisión si la vacante permite formación inicial.`;
   }else{
     text += ` El perfil requiere mayor validación frente a los requisitos principales del cargo.`;
   }
 
   if(matched.length){
     text += ` Destaca por ${matched.slice(0,5).join(', ')}.`;
-  }
-
-  if(missing.length && score < 65){
-    text += ` Se recomienda validar en entrevista aspectos como ${missing.slice(0,3).join(', ')}.`;
-  }else if(missing.length){
-    text += ` Aunque hay puntos por validar, cuenta con habilidades transferibles relevantes.`;
-  }else{
-    text += ` Cubre los principales requisitos definidos para el cargo.`;
   }
 
   return text;
